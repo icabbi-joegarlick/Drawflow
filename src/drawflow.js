@@ -631,7 +631,10 @@ export default class Drawflow {
     return nodes;
   }
 
-  addNode (name, num_in, num_out, ele_pos_x, ele_pos_y, classoverride, data, html, typenode = false) {
+  addNode (name, num_in, num_out, ele_pos_x, ele_pos_y, classoverride, data, html, typenode = false, nodeId) {
+    if(nodeId) {
+      this.nodeId = nodeId;
+    }
     const parent = document.createElement('div');
     parent.classList.add("parent-node");
 
@@ -857,13 +860,13 @@ export default class Drawflow {
   }
 
   removeNodeId(id) {
+    this.removeConnectionNodeId(id);
     var moduleName = this.getModuleFromNodeId(id.slice(5))
     if(this.module === moduleName) {
       document.getElementById(id).remove();
     }
     delete this.drawflow.drawflow[moduleName].data[id.slice(5)];
     this.dispatch('nodeRemoved', id.slice(5));
-    this.removeConnectionNodeId(id);
   }
 
   removeConnection() {
