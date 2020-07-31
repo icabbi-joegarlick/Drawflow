@@ -7,6 +7,10 @@ export default class Drawflow {
     this.ele_selected = null;
     this.node_selected = null;
     this.drag = false;
+    this.reroute = false;
+    this.reroute_curvature = 0;
+    this.reroute_width = 6;
+    this.drag_point = false;
     this.editor_selected = false;
     this.connection = false;
     this.connection_ele = null;
@@ -19,6 +23,7 @@ export default class Drawflow {
     this.mouse_y = 0;
     this.line_path = 5;
     this.first_click = null;
+
 
 
     this.select_elements = null;
@@ -66,6 +71,7 @@ export default class Drawflow {
     /* Update data Nodes */
     this.container.addEventListener('input', this.updateNodeValue.bind(this));
 
+    this.container.addEventListener('dblclick', this.dblclick.bind(this));
     /* Mobile zoom */
     this.container.onpointerdown = this.pointerdown_handler.bind(this);
     this.container.onpointermove = this.pointermove_handler.bind(this);
@@ -129,6 +135,13 @@ export default class Drawflow {
     for (var key in this.drawflow.drawflow[this.module].data) {
       this.addNodeImport(this.drawflow.drawflow[this.module].data[key], this.precanvas);
     }
+
+    if(this.reroute) {
+      for (var key in this.drawflow.drawflow[this.module].data) {
+        this.addRerouteImport(this.drawflow.drawflow[this.module].data[key]);
+      }
+    }
+
     for (var key in this.drawflow.drawflow[this.module].data) {
       this.updateConnectionNodes('node-'+key);
     }
@@ -225,6 +238,10 @@ export default class Drawflow {
         this.connection_selected = this.ele_selected;
         this.connection_selected.classList.add("selected");
       break;
+      case 'point':
+        this.drag_point = true;
+        this.ele_selected.classList.add("selected");
+      break;
       case 'drawflow-delete':
         if(this.node_selected ) {
           this.removeNodeId(this.node_selected.id);
@@ -295,6 +312,43 @@ export default class Drawflow {
       this.updateConnectionNodes(this.ele_selected.id, e_pos_x, e_pos_y)
     }
 
+    if(this.drag_point) {
+
+      var x = (this.pos_x - e_pos_x) * this.precanvas.clientWidth / (this.precanvas.clientWidth * this.zoom);
+      var y = (this.pos_y - e_pos_y) * this.precanvas.clientHeight / (this.precanvas.clientHeight * this.zoom);
+      this.pos_x = e_pos_x;
+      this.pos_y = e_pos_y;
+
+      var pos_x = this.pos_x * ( this.precanvas.clientWidth / (this.precanvas.clientWidth * this.zoom)) - (this.precanvas.getBoundingClientRect().x * ( this.precanvas.clientWidth / (this.precanvas.clientWidth * this.zoom)));
+      var pos_y = this.pos_y * ( this.precanvas.clientHeight / (this.precanvas.clientHeight * this.zoom)) - (this.precanvas.getBoundingClientRect().y * ( this.precanvas.clientHeight / (this.precanvas.clientHeight * this.zoom)));
+
+
+
+      this.ele_selected.setAttributeNS(null, 'cx', pos_x);
+      this.ele_selected.setAttributeNS(null, 'cy', pos_y);
+
+      const nodeUpdate = this.ele_selected.parentElement.classList[2].slice(9)
+      const nodeUpdateIn = this.ele_selected.parentElement.classList[1].slice(13);
+      const output_class = this.ele_selected.parentElement.classList[3];
+      const input_class = this.ele_selected.parentElement.classList[4];
+
+      const numberPointPosition = Array.from(this.ele_selected.parentElement.children).indexOf(this.ele_selected)-1;
+
+      const nodeId = nodeUpdate.slice(5);
+      const searchConnection = this.drawflow.drawflow[this.module].data[nodeId].outputs[output_class].connections.findIndex(function(item,i) {
+        return item.node ===  nodeUpdateIn && item.output === input_class;
+      });
+
+      this.drawflow.drawflow[this.module].data[nodeId].outputs[output_class].connections[searchConnection].points[numberPointPosition] = { pos_x: pos_x, pos_y: pos_y };
+
+      const parentSelected = this.ele_selected.parentElement.classList[2].slice(9);
+
+      /*this.drawflow.drawflow[this.module].data[this.ele_selected.id.slice(5)].pos_x = (this.ele_selected.offsetLeft - x);
+      this.drawflow.drawflow[this.module].data[this.ele_selected.id.slice(5)].pos_y = (this.ele_selected.offsetTop - y);
+      */
+      this.updateConnectionNodes(parentSelected, e_pos_x, e_pos_y)
+    }
+
     if (e.type === "touchmove") {
       this.mouse_x = e_pos_x;
       this.mouse_y = e_pos_y;
@@ -320,6 +374,10 @@ export default class Drawflow {
 
     if(this.drag) {
       this.dispatch('nodeMoved', this.ele_selected.id.slice(5));
+    }
+
+    if(this.drag_point) {
+      this.ele_selected.classList.remove("selected");
     }
 
     if(this.editor_selected) {
@@ -371,6 +429,7 @@ export default class Drawflow {
     }
 
     this.drag = false;
+    this.drag_point = false;
     this.connection = false;
     this.ele_selected = null;
     this.editor_selected = false;
@@ -415,7 +474,7 @@ export default class Drawflow {
     }
     if (e.key === 'Delete' || (e.key === 'Backspace' && e.metaKey)) {
       if(this.node_selected != null) {
-        if(this.first_click.tagName !== 'INPUT' && this.first_click.tagName !== 'TEXTAREA') {
+        if(this.first_click.tagName !== 'INPUT' && this.first_click.tagName !== 'TEXTAREA' && this.first_click.hasAttribute('contenteditable') !== true) {
           this.removeNodeId(this.node_selected.id);
         }
       }
@@ -535,88 +594,374 @@ export default class Drawflow {
   }
 
   updateConnectionNodes(id) {
+
     // Aquí nos quedamos;
     const idSearch = 'node_in_'+id;
     const idSearchOut = 'node_out_'+id;
     var line_path = this.line_path/2;
+    const precanvas = this.precanvas;
+    const reroute_curvature = this.reroute_curvature;
+    const rerouteWidth = this.reroute_width;
+    const zoom = this.zoom;
+
+
     const elemsOut = document.getElementsByClassName(idSearchOut);
+
     Object.keys(elemsOut).map(function(item, index) {
+      if(elemsOut[item].querySelector('.point') === null) {
 
-      var elemtsearchId_out = document.getElementById(id);
+        var elemtsearchId_out = document.getElementById(id);
 
-      var id_search = elemsOut[item].classList[1].replace('node_in_', '');
-      var elemtsearchId = document.getElementById(id_search);
+        var id_search = elemsOut[item].classList[1].replace('node_in_', '');
+        var elemtsearchId = document.getElementById(id_search);
 
-      var elemtsearch = elemtsearchId.querySelectorAll('.'+elemsOut[item].classList[4])[0]
+        var elemtsearch = elemtsearchId.querySelectorAll('.'+elemsOut[item].classList[4])[0]
 
-      var eX = elemtsearch.offsetWidth/2 + line_path + elemtsearch.parentElement.parentElement.offsetLeft + elemtsearch.offsetLeft;
-      var eY = elemtsearch.offsetHeight/2 + line_path + elemtsearch.parentElement.parentElement.offsetTop + elemtsearch.offsetTop;
+        var eX = elemtsearch.offsetWidth/2 + line_path + elemtsearch.parentElement.parentElement.offsetLeft + elemtsearch.offsetLeft;
+        var eY = elemtsearch.offsetHeight/2 + line_path + elemtsearch.parentElement.parentElement.offsetTop + elemtsearch.offsetTop;
 
-      var line_x = elemtsearchId_out.offsetLeft + elemtsearchId_out.querySelectorAll('.'+elemsOut[item].classList[3])[0].offsetLeft + elemtsearchId_out.querySelectorAll('.'+elemsOut[item].classList[3])[0].offsetWidth/2 + line_path;
-      var line_y = elemtsearchId_out.offsetTop + elemtsearchId_out.querySelectorAll('.'+elemsOut[item].classList[3])[0].offsetTop + elemtsearchId_out.querySelectorAll('.'+elemsOut[item].classList[3])[0].offsetHeight/2 + line_path;
+        var line_x = elemtsearchId_out.offsetLeft + elemtsearchId_out.querySelectorAll('.'+elemsOut[item].classList[3])[0].offsetLeft + elemtsearchId_out.querySelectorAll('.'+elemsOut[item].classList[3])[0].offsetWidth/2 + line_path;
+        var line_y = elemtsearchId_out.offsetTop + elemtsearchId_out.querySelectorAll('.'+elemsOut[item].classList[3])[0].offsetTop + elemtsearchId_out.querySelectorAll('.'+elemsOut[item].classList[3])[0].offsetHeight/2 + line_path;
 
-      var x = eX;
-      var y = eY;
+        var x = eX;
+        var y = eY;
 
-      var curvature = 0.5;
-      var hx1 = line_x + Math.abs(x - line_x) * curvature;
-      var hx2 = x - Math.abs(x - line_x) * curvature;
-      // console.log('M '+ line_x +' '+ line_y +' C '+ hx1 +' '+ line_y +' '+ hx2 +' ' + y +' ' + x +'  ' + y );
-      elemsOut[item].children[0].setAttributeNS(null, 'd', 'M '+ line_x +' '+ line_y +' C '+ hx1 +' '+ line_y +' '+ hx2 +' ' + y +' ' + x +'  ' + y );
+        var curvature = 0.5;
+        var hx1 = line_x + Math.abs(x - line_x) * curvature;
+        var hx2 = x - Math.abs(x - line_x) * curvature;
+        // console.log('M '+ line_x +' '+ line_y +' C '+ hx1 +' '+ line_y +' '+ hx2 +' ' + y +' ' + x +'  ' + y );
+        elemsOut[item].children[0].setAttributeNS(null, 'd', 'M '+ line_x +' '+ line_y +' C '+ hx1 +' '+ line_y +' '+ hx2 +' ' + y +' ' + x +'  ' + y );
+      } else {
+        const points = elemsOut[item].querySelectorAll('.point');
+        let linecurve = '';
+        points.forEach((item, i) => {
+          if(i === 0 && ((points.length -1) === 0)) {
+            // M line_x line_y C hx1 line_y hx2 y x y
+            var elemtsearchId_out = document.getElementById(id);
+            var elemtsearch = item;
 
+            var eX = (elemtsearch.getBoundingClientRect().x - precanvas.getBoundingClientRect().x ) * (precanvas.clientWidth / (precanvas.clientWidth * zoom)) + rerouteWidth;
+            var eY = (elemtsearch.getBoundingClientRect().y - precanvas.getBoundingClientRect().y ) * (precanvas.clientHeight / (precanvas.clientHeight * zoom)) +rerouteWidth;
+            var line_x = elemtsearchId_out.offsetLeft + elemtsearchId_out.querySelectorAll('.'+item.parentElement.classList[3])[0].offsetLeft + elemtsearchId_out.querySelectorAll('.'+item.parentElement.classList[3])[0].offsetWidth/2 + line_path;
+            var line_y = elemtsearchId_out.offsetTop + elemtsearchId_out.querySelectorAll('.'+item.parentElement.classList[3])[0].offsetTop + elemtsearchId_out.querySelectorAll('.'+item.parentElement.classList[3])[0].offsetHeight/2 + line_path;
+            var x = eX;
+            var y = eY;
+
+            var curvature = 0.5;
+            var hx1 = line_x + Math.abs(x - line_x) * curvature;
+            var hx2 = x - Math.abs(x - line_x) * curvature;
+            linecurve += ' M '+ line_x +' '+ line_y +' C '+ hx1 +' '+ line_y +' '+ hx2 +' ' + y +' ' + x +'  ' + y;
+
+            //var elemtsearchId_out = document.getElementById(id);
+            var elemtsearchId_out = item;
+            var id_search = item.parentElement.classList[1].replace('node_in_', '');
+            var elemtsearchId = document.getElementById(id_search);
+            var elemtsearch = elemtsearchId.querySelectorAll('.'+item.parentElement.classList[4])[0]
+
+            var eX = elemtsearch.offsetWidth/2 + line_path + elemtsearch.parentElement.parentElement.offsetLeft + elemtsearch.offsetLeft;
+            var eY = elemtsearch.offsetHeight/2 + line_path + elemtsearch.parentElement.parentElement.offsetTop + elemtsearch.offsetTop;
+            var line_x = (elemtsearchId_out.getBoundingClientRect().x - precanvas.getBoundingClientRect().x ) * (precanvas.clientWidth / (precanvas.clientWidth * zoom)) + rerouteWidth;
+            var line_y = (elemtsearchId_out.getBoundingClientRect().y - precanvas.getBoundingClientRect().y ) * (precanvas.clientHeight / (precanvas.clientHeight * zoom)) + rerouteWidth;
+            var x = eX;
+            var y = eY;
+
+            var curvature = 0.5;
+            var hx1 = line_x + Math.abs(x - line_x) * curvature;
+            var hx2 = x - Math.abs(x - line_x) * curvature;
+            linecurve += ' M '+ line_x +' '+ line_y +' C '+ hx1 +' '+ line_y +' '+ hx2 +' ' + y +' ' + x +'  ' + y;
+
+
+          } else if(i === 0) {
+            //console.log("Primero");
+            // M line_x line_y C hx1 line_y hx2 y x y
+            // FIRST
+            var elemtsearchId_out = document.getElementById(id);
+            var elemtsearch = item;
+
+            var eX = (elemtsearch.getBoundingClientRect().x - precanvas.getBoundingClientRect().x ) * (precanvas.clientWidth / (precanvas.clientWidth * zoom)) + rerouteWidth;
+            var eY = (elemtsearch.getBoundingClientRect().y - precanvas.getBoundingClientRect().y ) * (precanvas.clientHeight / (precanvas.clientHeight * zoom)) +rerouteWidth;
+            var line_x = elemtsearchId_out.offsetLeft + elemtsearchId_out.querySelectorAll('.'+item.parentElement.classList[3])[0].offsetLeft + elemtsearchId_out.querySelectorAll('.'+item.parentElement.classList[3])[0].offsetWidth/2 + line_path;
+            var line_y = elemtsearchId_out.offsetTop + elemtsearchId_out.querySelectorAll('.'+item.parentElement.classList[3])[0].offsetTop + elemtsearchId_out.querySelectorAll('.'+item.parentElement.classList[3])[0].offsetHeight/2 + line_path;
+            var x = eX;
+            var y = eY;
+
+            var curvature = 0.5;
+            var hx1 = line_x + Math.abs(x - line_x) * curvature;
+            var hx2 = x - Math.abs(x - line_x) * curvature;
+            linecurve += ' M '+ line_x +' '+ line_y +' C '+ hx1 +' '+ line_y +' '+ hx2 +' ' + y +' ' + x +'  ' + y;
+
+            // SECOND
+            var elemtsearchId_out = item;
+            var elemtsearch = points[i+1];
+
+            var eX = (elemtsearch.getBoundingClientRect().x - precanvas.getBoundingClientRect().x ) * (precanvas.clientWidth / (precanvas.clientWidth * zoom)) + rerouteWidth;
+            var eY = (elemtsearch.getBoundingClientRect().y - precanvas.getBoundingClientRect().y ) * (precanvas.clientHeight / (precanvas.clientHeight * zoom)) +rerouteWidth;
+            var line_x = (elemtsearchId_out.getBoundingClientRect().x - precanvas.getBoundingClientRect().x ) * (precanvas.clientWidth / (precanvas.clientWidth * zoom)) + rerouteWidth;
+            var line_y = (elemtsearchId_out.getBoundingClientRect().y - precanvas.getBoundingClientRect().y ) * (precanvas.clientHeight / (precanvas.clientHeight * zoom)) + rerouteWidth;
+            var x = eX;
+            var y = eY;
+
+            var curvature = reroute_curvature;
+            var hx1 = line_x + Math.abs(x - line_x) * curvature;
+            var hx2 = x - Math.abs(x - line_x) * curvature;
+            linecurve += ' M '+ line_x +' '+ line_y +' C '+ hx1 +' '+ line_y +' '+ hx2 +' ' + y +' ' + x +'  ' + y;
+
+
+
+          } else if (i === (points.length -1)) {
+            //console.log("Final");
+            var elemtsearchId_out = item;
+
+            var id_search = item.parentElement.classList[1].replace('node_in_', '');
+            var elemtsearchId = document.getElementById(id_search);
+            var elemtsearch = elemtsearchId.querySelectorAll('.'+item.parentElement.classList[4])[0]
+
+            var eX = elemtsearch.offsetWidth/2 + line_path + elemtsearch.parentElement.parentElement.offsetLeft + elemtsearch.offsetLeft;
+            var eY = elemtsearch.offsetHeight/2 + line_path + elemtsearch.parentElement.parentElement.offsetTop + elemtsearch.offsetTop;
+            var line_x = (elemtsearchId_out.getBoundingClientRect().x - precanvas.getBoundingClientRect().x ) * (precanvas.clientWidth / (precanvas.clientWidth * zoom)) + rerouteWidth;
+            var line_y = (elemtsearchId_out.getBoundingClientRect().y - precanvas.getBoundingClientRect().y ) * (precanvas.clientHeight / (precanvas.clientHeight * zoom)) + rerouteWidth;
+            var x = eX;
+            var y = eY;
+
+            var curvature = 0.5;
+            var hx1 = line_x + Math.abs(x - line_x) * curvature;
+            var hx2 = x - Math.abs(x - line_x) * curvature;
+            linecurve += ' M '+ line_x +' '+ line_y +' C '+ hx1 +' '+ line_y +' '+ hx2 +' ' + y +' ' + x +'  ' + y;
+          } else {
+            var elemtsearchId_out = item;
+            var elemtsearch = points[i+1];
+
+            var eX = (elemtsearch.getBoundingClientRect().x - precanvas.getBoundingClientRect().x ) * (precanvas.clientWidth / (precanvas.clientWidth * zoom)) + rerouteWidth;
+            var eY = (elemtsearch.getBoundingClientRect().y - precanvas.getBoundingClientRect().y ) * (precanvas.clientHeight / (precanvas.clientHeight * zoom)) +rerouteWidth;
+            var line_x = (elemtsearchId_out.getBoundingClientRect().x - precanvas.getBoundingClientRect().x ) * (precanvas.clientWidth / (precanvas.clientWidth * zoom)) + rerouteWidth;
+            var line_y = (elemtsearchId_out.getBoundingClientRect().y - precanvas.getBoundingClientRect().y ) * (precanvas.clientHeight / (precanvas.clientHeight * zoom)) + rerouteWidth;
+            var x = eX;
+            var y = eY;
+
+            var curvature = reroute_curvature;
+            var hx1 = line_x + Math.abs(x - line_x) * curvature;
+            var hx2 = x - Math.abs(x - line_x) * curvature;
+            linecurve += ' M '+ line_x +' '+ line_y +' C '+ hx1 +' '+ line_y +' '+ hx2 +' ' + y +' ' + x +'  ' + y;
+          }
+
+        });
+        elemsOut[item].children[0].setAttributeNS(null, 'd', linecurve);
+      }
     })
 
     const elems = document.getElementsByClassName(idSearch);
     Object.keys(elems).map(function(item, index) {
       // console.log("In")
-      var elemtsearchId_in = document.getElementById(id);
+      if(elems[item].querySelector('.point') === null) {
+        var elemtsearchId_in = document.getElementById(id);
 
-      var id_search = elems[item].classList[2].replace('node_out_', '');
-      var elemtsearchId = document.getElementById(id_search);
+        var id_search = elems[item].classList[2].replace('node_out_', '');
+        var elemtsearchId = document.getElementById(id_search);
 
-      var elemtsearch = elemtsearchId.querySelectorAll('.'+elems[item].classList[3])[0]
+        var elemtsearch = elemtsearchId.querySelectorAll('.'+elems[item].classList[3])[0]
 
-      var line_x = elemtsearch.offsetWidth/2 + line_path + elemtsearch.parentElement.parentElement.offsetLeft + elemtsearch.offsetLeft;
-      var line_y = elemtsearch.offsetHeight/2 + line_path + elemtsearch.parentElement.parentElement.offsetTop + elemtsearch.offsetTop;
+        var line_x = elemtsearch.offsetWidth/2 + line_path + elemtsearch.parentElement.parentElement.offsetLeft + elemtsearch.offsetLeft;
+        var line_y = elemtsearch.offsetHeight/2 + line_path + elemtsearch.parentElement.parentElement.offsetTop + elemtsearch.offsetTop;
 
-      var x = elemtsearchId_in.offsetLeft + elemtsearchId_in.querySelectorAll('.'+elems[item].classList[4])[0].offsetLeft + elemtsearchId_in.querySelectorAll('.'+elems[item].classList[4])[0].offsetWidth/2 + line_path;
-      var y = elemtsearchId_in.offsetTop + elemtsearchId_in.querySelectorAll('.'+elems[item].classList[4])[0].offsetTop + elemtsearchId_in.querySelectorAll('.'+elems[item].classList[4])[0].offsetHeight/2 + line_path;
+        var x = elemtsearchId_in.offsetLeft + elemtsearchId_in.querySelectorAll('.'+elems[item].classList[4])[0].offsetLeft + elemtsearchId_in.querySelectorAll('.'+elems[item].classList[4])[0].offsetWidth/2 + line_path;
+        var y = elemtsearchId_in.offsetTop + elemtsearchId_in.querySelectorAll('.'+elems[item].classList[4])[0].offsetTop + elemtsearchId_in.querySelectorAll('.'+elems[item].classList[4])[0].offsetHeight/2 + line_path;
 
-      var curvature = 0.5;
-      var hx1 = line_x + Math.abs(x - line_x) * curvature;
-      var hx2 = x - Math.abs(x - line_x) * curvature;
-      // console.log('M '+ line_x +' '+ line_y +' C '+ hx1 +' '+ line_y +' '+ hx2 +' ' + y +' ' + x +'  ' + y );
-      elems[item].children[0].setAttributeNS(null, 'd', 'M '+ line_x +' '+ line_y +' C '+ hx1 +' '+ line_y +' '+ hx2 +' ' + y +' ' + x +'  ' + y );
+        var curvature = 0.5;
+        var hx1 = line_x + Math.abs(x - line_x) * curvature;
+        var hx2 = x - Math.abs(x - line_x) * curvature;
+        // console.log('M '+ line_x +' '+ line_y +' C '+ hx1 +' '+ line_y +' '+ hx2 +' ' + y +' ' + x +'  ' + y );
+        elems[item].children[0].setAttributeNS(null, 'd', 'M '+ line_x +' '+ line_y +' C '+ hx1 +' '+ line_y +' '+ hx2 +' ' + y +' ' + x +'  ' + y );
+      } else {
+        const points = elems[item].querySelectorAll('.point');
+        let linecurve = '';
+        points.forEach((item, i) => {
+          if(i === 0 && ((points.length -1) === 0)) {
+            // M line_x line_y C hx1 line_y hx2 y x y
+            var elemtsearchId_out = document.getElementById(id);
+            var elemtsearch = item;
 
+            var line_x = (elemtsearch.getBoundingClientRect().x - precanvas.getBoundingClientRect().x ) * (precanvas.clientWidth / (precanvas.clientWidth * zoom)) + rerouteWidth;
+            var line_y = (elemtsearch.getBoundingClientRect().y - precanvas.getBoundingClientRect().y ) * (precanvas.clientHeight / (precanvas.clientHeight * zoom)) +rerouteWidth;
+            var eX = elemtsearchId_out.offsetLeft + elemtsearchId_out.querySelectorAll('.'+item.parentElement.classList[4])[0].offsetLeft + elemtsearchId_out.querySelectorAll('.'+item.parentElement.classList[4])[0].offsetWidth/2 + line_path;
+            var eY = elemtsearchId_out.offsetTop + elemtsearchId_out.querySelectorAll('.'+item.parentElement.classList[4])[0].offsetTop + elemtsearchId_out.querySelectorAll('.'+item.parentElement.classList[4])[0].offsetHeight/2 + line_path;
+            var x = eX;
+            var y = eY;
+
+            var curvature = 0.5;
+            var hx1 = line_x + Math.abs(x - line_x) * curvature;
+            var hx2 = x - Math.abs(x - line_x) * curvature;
+            linecurve += ' M '+ line_x +' '+ line_y +' C '+ hx1 +' '+ line_y +' '+ hx2 +' ' + y +' ' + x +'  ' + y;
+
+            //var elemtsearchId_out = document.getElementById(id);
+            var elemtsearchId_out = item;
+
+            var id_search = item.parentElement.classList[2].replace('node_out_', '');
+            var elemtsearchId = document.getElementById(id_search);
+            var elemtsearch = elemtsearchId.querySelectorAll('.'+item.parentElement.classList[3])[0]
+
+            var line_x = elemtsearch.offsetWidth/2 + line_path + elemtsearch.parentElement.parentElement.offsetLeft + elemtsearch.offsetLeft;
+            var line_y = elemtsearch.offsetHeight/2 + line_path + elemtsearch.parentElement.parentElement.offsetTop + elemtsearch.offsetTop;
+            var eX = (elemtsearchId_out.getBoundingClientRect().x - precanvas.getBoundingClientRect().x ) * (precanvas.clientWidth / (precanvas.clientWidth * zoom)) + rerouteWidth;
+            var eY = (elemtsearchId_out.getBoundingClientRect().y - precanvas.getBoundingClientRect().y ) * (precanvas.clientHeight / (precanvas.clientHeight * zoom)) + rerouteWidth;
+            var x = eX;
+            var y = eY;
+
+            var curvature = 0.5;
+            var hx1 = line_x + Math.abs(x - line_x) * curvature;
+            var hx2 = x - Math.abs(x - line_x) * curvature;
+            linecurve += ' M '+ line_x +' '+ line_y +' C '+ hx1 +' '+ line_y +' '+ hx2 +' ' + y +' ' + x +'  ' + y;
+
+
+          } else if(i === 0) {
+            // M line_x line_y C hx1 line_y hx2 y x y
+            // FIRST
+            var elemtsearchId_out = item;
+            var id_search = item.parentElement.classList[2].replace('node_out_', '');
+            var elemtsearchId = document.getElementById(id_search);
+            var elemtsearch = elemtsearchId.querySelectorAll('.'+item.parentElement.classList[3])[0]
+
+            var line_x = elemtsearch.offsetWidth/2 + line_path + elemtsearch.parentElement.parentElement.offsetLeft + elemtsearch.offsetLeft;
+            var line_y = elemtsearch.offsetHeight/2 + line_path + elemtsearch.parentElement.parentElement.offsetTop + elemtsearch.offsetTop;
+            var eX = (elemtsearchId_out.getBoundingClientRect().x - precanvas.getBoundingClientRect().x ) * (precanvas.clientWidth / (precanvas.clientWidth * zoom)) + rerouteWidth;
+            var eY = (elemtsearchId_out.getBoundingClientRect().y - precanvas.getBoundingClientRect().y ) * (precanvas.clientHeight / (precanvas.clientHeight * zoom)) + rerouteWidth;
+            var x = eX;
+            var y = eY;
+
+            var curvature = 0.5;
+            var hx1 = line_x + Math.abs(x - line_x) * curvature;
+            var hx2 = x - Math.abs(x - line_x) * curvature;
+            linecurve += ' M '+ line_x +' '+ line_y +' C '+ hx1 +' '+ line_y +' '+ hx2 +' ' + y +' ' + x +'  ' + y;
+
+            // SECOND
+            var elemtsearchId_out = item;
+            var elemtsearch = points[i+1];
+
+            var eX = (elemtsearch.getBoundingClientRect().x - precanvas.getBoundingClientRect().x ) * (precanvas.clientWidth / (precanvas.clientWidth * zoom)) + rerouteWidth;
+            var eY = (elemtsearch.getBoundingClientRect().y - precanvas.getBoundingClientRect().y ) * (precanvas.clientHeight / (precanvas.clientHeight * zoom)) +rerouteWidth;
+            var line_x = (elemtsearchId_out.getBoundingClientRect().x - precanvas.getBoundingClientRect().x ) * (precanvas.clientWidth / (precanvas.clientWidth * zoom)) + rerouteWidth;
+            var line_y = (elemtsearchId_out.getBoundingClientRect().y - precanvas.getBoundingClientRect().y ) * (precanvas.clientHeight / (precanvas.clientHeight * zoom)) + rerouteWidth;
+            var x = eX;
+            var y = eY;
+
+            var curvature = reroute_curvature;
+            var hx1 = line_x + Math.abs(x - line_x) * curvature;
+            var hx2 = x - Math.abs(x - line_x) * curvature;
+            linecurve += ' M '+ line_x +' '+ line_y +' C '+ hx1 +' '+ line_y +' '+ hx2 +' ' + y +' ' + x +'  ' + y;
+
+          } else if (i === (points.length -1)) {
+
+            var elemtsearchId_out = item;
+
+            var id_search = item.parentElement.classList[1].replace('node_in_', '');
+            var elemtsearchId = document.getElementById(id_search);
+            var elemtsearch = elemtsearchId.querySelectorAll('.'+item.parentElement.classList[4])[0]
+
+            var eX = elemtsearch.offsetWidth/2 + line_path + elemtsearch.parentElement.parentElement.offsetLeft + elemtsearch.offsetLeft;
+            var eY = elemtsearch.offsetHeight/2 + line_path + elemtsearch.parentElement.parentElement.offsetTop + elemtsearch.offsetTop;
+            var line_x = (elemtsearchId_out.getBoundingClientRect().x - precanvas.getBoundingClientRect().x ) * (precanvas.clientWidth / (precanvas.clientWidth * zoom)) + rerouteWidth;
+            var line_y = (elemtsearchId_out.getBoundingClientRect().y - precanvas.getBoundingClientRect().y ) * (precanvas.clientHeight / (precanvas.clientHeight * zoom)) + rerouteWidth;
+            var x = eX;
+            var y = eY;
+
+            var curvature = 0.5;
+            var hx1 = line_x + Math.abs(x - line_x) * curvature;
+            var hx2 = x - Math.abs(x - line_x) * curvature;
+            linecurve += ' M '+ line_x +' '+ line_y +' C '+ hx1 +' '+ line_y +' '+ hx2 +' ' + y +' ' + x +'  ' + y;
+
+          } else {
+
+            var elemtsearchId_out = item;
+            var elemtsearch = points[i+1];
+
+            var eX = (elemtsearch.getBoundingClientRect().x - precanvas.getBoundingClientRect().x ) * (precanvas.clientWidth / (precanvas.clientWidth * zoom)) + rerouteWidth;
+            var eY = (elemtsearch.getBoundingClientRect().y - precanvas.getBoundingClientRect().y ) * (precanvas.clientHeight / (precanvas.clientHeight * zoom)) +rerouteWidth;
+            var line_x = (elemtsearchId_out.getBoundingClientRect().x - precanvas.getBoundingClientRect().x ) * (precanvas.clientWidth / (precanvas.clientWidth * zoom)) + rerouteWidth;
+            var line_y = (elemtsearchId_out.getBoundingClientRect().y - precanvas.getBoundingClientRect().y ) * (precanvas.clientHeight / (precanvas.clientHeight * zoom)) + rerouteWidth;
+            var x = eX;
+            var y = eY;
+
+            var curvature = reroute_curvature;
+            var hx1 = line_x + Math.abs(x - line_x) * curvature;
+            var hx2 = x - Math.abs(x - line_x) * curvature;
+            linecurve += ' M '+ line_x +' '+ line_y +' C '+ hx1 +' '+ line_y +' '+ hx2 +' ' + y +' ' + x +'  ' + y;
+          }
+
+        });
+        elems[item].children[0].setAttributeNS(null, 'd', linecurve);
+      }
     })
   }
 
-  /*selectElements(eX, eY) {
-    if(this.select_elements == null) {
-      var div = document.createElementNS('http://www.w3.org/2000/svg',"svg");
-      this.select_elements = div;
-      this.pos_click_x = eX;
-      this.pos_click_y = eY;
-        var rect = document.createElementNS('http://www.w3.org/2000/svg',"rect");
-        rect.setAttributeNS(null, 'd', '');
-      // rect.innerHTML = 'a';
-      div.classList.add("selectbox");
-      div.appendChild(rect);
-      this.precanvas.appendChild(div);
+
+  dblclick(e) {
+    if(this.connection_selected != null && this.reroute) {
+        this.createReroutePoint(this.connection_selected);
     }
 
-    this.select_elements.children[0].setAttributeNS(null, 'x', this.pos_click_x - this.precanvas.offsetLeft - this.canvas_x);
-    this.select_elements.children[0].setAttributeNS(null, 'y', this.pos_click_y - this.precanvas.offsetTop - this.canvas_y);
-    this.select_elements.children[0].setAttributeNS(null, 'width', eX - this.pos_click_x);
-    this.select_elements.children[0].setAttributeNS(null, 'height', eY - this.pos_click_y);
-  }*/
+    if(e.target.classList[0] === 'point') {
+        this.removeReroutePoint(e.target);
+    }
+  }
+
+  createReroutePoint(ele) {
+      this.connection_selected.classList.remove("selected");
+      const nodeUpdate = this.connection_selected.parentElement.classList[2].slice(9);
+      const nodeUpdateIn = this.connection_selected.parentElement.classList[1].slice(13);
+      const output_class = this.connection_selected.parentElement.classList[3];
+      const input_class = this.connection_selected.parentElement.classList[4];
+      this.connection_selected = null;
+      const point = document.createElementNS('http://www.w3.org/2000/svg',"circle");
+      point.classList.add("point");
+      var pos_x = this.pos_x * ( this.precanvas.clientWidth / (this.precanvas.clientWidth * this.zoom)) - (this.precanvas.getBoundingClientRect().x * ( this.precanvas.clientWidth / (this.precanvas.clientWidth * this.zoom)));
+      var pos_y = this.pos_y * ( this.precanvas.clientHeight / (this.precanvas.clientHeight * this.zoom)) - (this.precanvas.getBoundingClientRect().y * ( this.precanvas.clientHeight / (this.precanvas.clientHeight * this.zoom)));
+
+      point.setAttributeNS(null, 'cx', pos_x);
+      point.setAttributeNS(null, 'cy', pos_y);
+      point.setAttributeNS(null, 'r', this.reroute_width);
+
+      ele.parentElement.appendChild(point);
+
+      const nodeId = nodeUpdate.slice(5);
+      const searchConnection = this.drawflow.drawflow[this.module].data[nodeId].outputs[output_class].connections.findIndex(function(item,i) {
+        return item.node ===  nodeUpdateIn && item.output === input_class;
+      });
+
+      if(this.drawflow.drawflow[this.module].data[nodeId].outputs[output_class].connections[searchConnection].points === undefined)  {
+        this.drawflow.drawflow[this.module].data[nodeId].outputs[output_class].connections[searchConnection].points = [];
+      }
+      this.drawflow.drawflow[this.module].data[nodeId].outputs[output_class].connections[searchConnection].points.push({ pos_x: pos_x, pos_y: pos_y });
+      this.dispatch('addReroute', nodeId);
+      this.updateConnectionNodes(nodeUpdate);
+  }
+
+  removeReroutePoint(ele) {
+    const nodeUpdate = ele.parentElement.classList[2].slice(9)
+    const nodeUpdateIn = ele.parentElement.classList[1].slice(13);
+    const output_class = ele.parentElement.classList[3];
+    const input_class = ele.parentElement.classList[4];
+
+    const numberPointPosition = Array.from(ele.parentElement.children).indexOf(ele)-1;
+
+    const nodeId = nodeUpdate.slice(5);
+    const searchConnection = this.drawflow.drawflow[this.module].data[nodeId].outputs[output_class].connections.findIndex(function(item,i) {
+      return item.node ===  nodeUpdateIn && item.output === input_class;
+    });
+
+    this.drawflow.drawflow[this.module].data[nodeId].outputs[output_class].connections[searchConnection].points.splice(numberPointPosition,1);
+
+    ele.remove();
+    this.dispatch('removeReroute', nodeId);
+    this.updateConnectionNodes(nodeUpdate);
+
+  }
+
   registerNode(name, html, props = null, options = null) {
     this.noderegister[name] = {html: html, props: props, options: options};
   }
 
   getNodeFromId(id) {
     var moduleName = this.getModuleFromNodeId(id)
-    return this.drawflow.drawflow[moduleName].data[id];
+    return JSON.parse(JSON.stringify(this.drawflow.drawflow[moduleName].data[id]));
   }
   getNodesFromName(name) {
     var nodes = [];
@@ -847,6 +1192,34 @@ export default class Drawflow {
     this.precanvas.appendChild(parent);
   }
 
+  addRerouteImport(dataNode) {
+    const reroute_width = this.reroute_width
+    Object.keys(dataNode.outputs).map(function(output_item, index) {
+      Object.keys(dataNode.outputs[output_item].connections).map(function(input_item, index) {
+        const points = dataNode.outputs[output_item].connections[input_item].points
+        if(points !== undefined) {
+          points.forEach((item, i) => {
+            const input_id = dataNode.outputs[output_item].connections[input_item].node;
+            const input_class = dataNode.outputs[output_item].connections[input_item].output;
+            //console.log('.connection.node_in_'+input_id+'.node_out_'+dataNode.id+'.'+output_item+'.'+input_class);
+            const ele = document.querySelector('.connection.node_in_node-'+input_id+'.node_out_node-'+dataNode.id+'.'+output_item+'.'+input_class);
+            const point = document.createElementNS('http://www.w3.org/2000/svg',"circle");
+            point.classList.add("point");
+            var pos_x = item.pos_x;
+            var pos_y = item.pos_y;
+
+            point.setAttributeNS(null, 'cx', pos_x);
+            point.setAttributeNS(null, 'cy', pos_y);
+            point.setAttributeNS(null, 'r', reroute_width);
+
+            ele.appendChild(point);
+
+          });
+        };
+      });
+    });
+  }
+
   updateNodeValue(event) {
     var attr = event.target.attributes
     for(var i= 0; i < attr.length; i++) {
@@ -858,6 +1231,189 @@ export default class Drawflow {
 
 
   }
+
+  addNodeInput(id) {
+    var moduleName = this.getModuleFromNodeId(id)
+    const infoNode = this.getNodeFromId(id)
+    const numInputs = Object.keys(infoNode.inputs).length;
+    if(this.module === moduleName) {
+      //Draw input
+      const input = document.createElement('div');
+      input.classList.add("input");
+      input.classList.add("input_"+(numInputs+1));
+      const parent = document.querySelector('#node-'+id+' .inputs');
+      parent.appendChild(input);
+      this.updateConnectionNodes('node-'+id);
+
+    }
+    this.drawflow.drawflow[moduleName].data[id].inputs["input_"+(numInputs+1)] = { "connections": []};
+  }
+
+  addNodeOutput(id) {
+    var moduleName = this.getModuleFromNodeId(id)
+    const infoNode = this.getNodeFromId(id)
+    const numOutputs = Object.keys(infoNode.outputs).length;
+    if(this.module === moduleName) {
+      //Draw output
+      const output = document.createElement('div');
+      output.classList.add("output");
+      output.classList.add("output_"+(numOutputs+1));
+      const parent = document.querySelector('#node-'+id+' .outputs');
+      parent.appendChild(output);
+      this.updateConnectionNodes('node-'+id);
+
+    }
+    this.drawflow.drawflow[moduleName].data[id].outputs["output_"+(numOutputs+1)] = { "connections": []};
+  }
+
+  removeNodeInput(id, input_class) {
+    var moduleName = this.getModuleFromNodeId(id)
+    const infoNode = this.getNodeFromId(id)
+    if(this.module === moduleName) {
+      document.querySelector('#node-'+id+' .inputs .input.'+input_class).remove();
+    }
+    const removeInputs = [];
+    Object.keys(infoNode.inputs[input_class].connections).map(function(key, index) {
+      const id_output = infoNode.inputs[input_class].connections[index].node;
+      const output_class = infoNode.inputs[input_class].connections[index].input;
+      removeInputs.push({id_output, id, output_class, input_class})
+    })
+    // Remove connections
+    removeInputs.forEach((item, i) => {
+      this.removeSingleConnection(item.id_output, item.id, item.output_class, item.input_class);
+    });
+
+    delete this.drawflow.drawflow[moduleName].data[id].inputs[input_class];
+
+    // Update connection
+    const connections = [];
+    const connectionsInputs = this.drawflow.drawflow[moduleName].data[id].inputs
+    Object.keys(connectionsInputs).map(function(key, index) {
+      connections.push(connectionsInputs[key]);
+    });
+    this.drawflow.drawflow[moduleName].data[id].inputs = {};
+    const input_class_id = input_class.slice(6);
+    let nodeUpdates = [];
+    connections.forEach((item, i) => {
+      item.connections.forEach((itemx, f) => {
+        nodeUpdates.push(itemx);
+      });
+      this.drawflow.drawflow[moduleName].data[id].inputs['input_'+ (i+1)] = item;
+    });
+    nodeUpdates =  new Set(nodeUpdates.map(e => JSON.stringify(e)));
+    nodeUpdates = Array.from(nodeUpdates).map(e => JSON.parse(e));
+
+    if(this.module === moduleName) {
+      const eles = document.querySelectorAll("#node-"+id +" .inputs .input");
+      eles.forEach((item, i) => {
+        const id_class = item.classList[1].slice(6);
+        if(input_class_id < id_class) {
+          item.classList.remove('input_'+id_class);
+          item.classList.add('input_'+(id_class-1));
+        }
+      });
+
+    }
+
+    nodeUpdates.forEach((itemx, i) => {
+      this.drawflow.drawflow[moduleName].data[itemx.node].outputs[itemx.input].connections.forEach((itemz, g) => {
+          if(itemz.node == id) {
+            const output_id = itemz.output.slice(6);
+            if(input_class_id < output_id) {
+              if(this.module === moduleName) {
+                const ele = document.querySelector(".connection.node_in_node-"+id+".node_out_node-"+itemx.node+"."+itemx.input+".input_"+output_id);
+                ele.classList.remove('input_'+output_id);
+                ele.classList.add('input_'+(output_id-1));
+              }
+              if(itemz.points) {
+                  this.drawflow.drawflow[moduleName].data[itemx.node].outputs[itemx.input].connections[g] = { node: itemz.node, output: 'input_'+(output_id-1), points: itemz.points }
+              } else {
+                  this.drawflow.drawflow[moduleName].data[itemx.node].outputs[itemx.input].connections[g] = { node: itemz.node, output: 'input_'+(output_id-1)}
+              }
+            }
+          }
+      });
+    });
+    this.updateConnectionNodes('node-'+id);
+  }
+
+  removeNodeOutput(id, output_class) {
+    var moduleName = this.getModuleFromNodeId(id)
+    const infoNode = this.getNodeFromId(id)
+    if(this.module === moduleName) {
+      document.querySelector('#node-'+id+' .outputs .output.'+output_class).remove();
+    }
+    const removeOutputs = [];
+    Object.keys(infoNode.outputs[output_class].connections).map(function(key, index) {
+      const id_input = infoNode.outputs[output_class].connections[index].node;
+      const input_class = infoNode.outputs[output_class].connections[index].output;
+      removeOutputs.push({id, id_input, output_class, input_class})
+    })
+    // Remove connections
+    removeOutputs.forEach((item, i) => {
+      this.removeSingleConnection(item.id, item.id_input, item.output_class, item.input_class);
+    });
+
+    delete this.drawflow.drawflow[moduleName].data[id].outputs[output_class];
+
+    // Update connection
+    const connections = [];
+    const connectionsOuputs = this.drawflow.drawflow[moduleName].data[id].outputs
+    Object.keys(connectionsOuputs).map(function(key, index) {
+      connections.push(connectionsOuputs[key]);
+    });
+    this.drawflow.drawflow[moduleName].data[id].outputs = {};
+    const output_class_id = output_class.slice(7);
+    let nodeUpdates = [];
+    connections.forEach((item, i) => {
+      item.connections.forEach((itemx, f) => {
+        nodeUpdates.push({ node: itemx.node, output: itemx.output });
+      });
+      this.drawflow.drawflow[moduleName].data[id].outputs['output_'+ (i+1)] = item;
+    });
+    nodeUpdates =  new Set(nodeUpdates.map(e => JSON.stringify(e)));
+    nodeUpdates = Array.from(nodeUpdates).map(e => JSON.parse(e));
+
+    if(this.module === moduleName) {
+      const eles = document.querySelectorAll("#node-"+id +" .outputs .output");
+      eles.forEach((item, i) => {
+        const id_class = item.classList[1].slice(7);
+        if(output_class_id < id_class) {
+          item.classList.remove('output_'+id_class);
+          item.classList.add('output_'+(id_class-1));
+        }
+      });
+
+    }
+
+    nodeUpdates.forEach((itemx, i) => {
+      this.drawflow.drawflow[moduleName].data[itemx.node].inputs[itemx.output].connections.forEach((itemz, g) => {
+          if(itemz.node == id) {
+            const input_id = itemz.input.slice(7);
+            if(output_class_id < input_id) {
+              if(this.module === moduleName) {
+
+                const ele = document.querySelector(".connection.node_in_node-"+itemx.node+".node_out_node-"+id+".output_"+input_id+"."+itemx.output);
+                ele.classList.remove('output_'+input_id);
+                ele.classList.remove(itemx.output);
+                ele.classList.add('output_'+(input_id-1));
+                ele.classList.add(itemx.output);
+              }
+              if(itemz.points) {
+                  this.drawflow.drawflow[moduleName].data[itemx.node].inputs[itemx.output].connections[g] = { node: itemz.node, input: 'output_'+(input_id-1), points: itemz.points }
+              } else {
+                  this.drawflow.drawflow[moduleName].data[itemx.node].inputs[itemx.output].connections[g] = { node: itemz.node, input: 'output_'+(input_id-1)}
+              }
+            }
+          }
+      });
+    });
+
+    this.updateConnectionNodes('node-'+id);
+
+  }
+
+
 
   removeNodeId(id) {
     this.removeConnectionNodeId(id);
@@ -873,7 +1429,7 @@ export default class Drawflow {
     if(this.connection_selected != null) {
       var listclass = this.connection_selected.parentElement.classList;
       this.connection_selected.parentElement.remove();
-
+      console.log(listclass);
       var index_out = this.drawflow.drawflow[this.module].data[listclass[2].slice(14)].outputs[listclass[3]].connections.findIndex(function(item,i) {
         return item.node === listclass[1].slice(13) && item.output === listclass[4]
       });
@@ -888,24 +1444,61 @@ export default class Drawflow {
     }
   }
 
+  removeSingleConnection(id_output, id_input, output_class, input_class) {
+    var nodeOneModule = this.getModuleFromNodeId(id_output);
+    var nodeTwoModule = this.getModuleFromNodeId(id_input);
+    if(nodeOneModule === nodeTwoModule) {
+      // Check nodes in same module.
+
+      // Check connection exist
+      var exists = this.drawflow.drawflow[nodeOneModule].data[id_output].outputs[output_class].connections.findIndex(function(item,i) {
+        return item.node == id_input && item.output === input_class
+      });
+      if(exists > -1) {
+
+        if(this.module === nodeOneModule) {
+          // In same module with view.
+          document.querySelector('.connection.node_in_node-'+id_input+'.node_out_node-'+id_output+'.'+output_class+'.'+input_class).remove();
+        }
+
+        var index_out = this.drawflow.drawflow[nodeOneModule].data[id_output].outputs[output_class].connections.findIndex(function(item,i) {
+          return item.node == id_input && item.output === input_class
+        });
+        this.drawflow.drawflow[nodeOneModule].data[id_output].outputs[output_class].connections.splice(index_out,1);
+
+        var index_in = this.drawflow.drawflow[nodeOneModule].data[id_input].inputs[input_class].connections.findIndex(function(item,i) {
+          return item.node == id_output && item.input === output_class
+        });
+        this.drawflow.drawflow[nodeOneModule].data[id_input].inputs[input_class].connections.splice(index_in,1);
+
+        this.dispatch('connectionRemoved', { output_id: id_output, input_id: id_input, output_class:  output_class, input_class: input_class});
+        return true;
+
+      } else {
+        return false;
+      }
+    } else {
+      return false;
+    }
+  }
+
   removeConnectionNodeId(id) {
     const idSearchIn = 'node_in_'+id;
     const idSearchOut = 'node_out_'+id;
 
     const elemsOut = document.getElementsByClassName(idSearchOut);
     for(var i = elemsOut.length-1; i >= 0; i--) {
-
       var listclass = elemsOut[i].classList;
-      /*
-      var index_out = this.drawflow.drawflow[this.module].data[listclass[2].slice(14)].outputs[listclass[3]].connections.findIndex(function(item,i) {
-        return item.node === listclass[1].slice(13) && item.output === listclass[4]
-      });
-      this.drawflow.drawflow[this.module].data[listclass[2].slice(14)].outputs[listclass[3]].connections.splice(index_out,1);
-      */
+
       var index_in = this.drawflow.drawflow[this.module].data[listclass[1].slice(13)].inputs[listclass[4]].connections.findIndex(function(item,i) {
         return item.node === listclass[2].slice(14) && item.input === listclass[3]
       });
       this.drawflow.drawflow[this.module].data[listclass[1].slice(13)].inputs[listclass[4]].connections.splice(index_in,1);
+
+      var index_out = this.drawflow.drawflow[this.module].data[listclass[2].slice(14)].outputs[listclass[3]].connections.findIndex(function(item,i) {
+        return item.node === listclass[1].slice(13) && item.output === listclass[4]
+      });
+      this.drawflow.drawflow[this.module].data[listclass[2].slice(14)].outputs[listclass[3]].connections.splice(index_out,1);
 
       elemsOut[i].remove();
 
@@ -921,12 +1514,12 @@ export default class Drawflow {
         return item.node === listclass[1].slice(13) && item.output === listclass[4]
       });
       this.drawflow.drawflow[this.module].data[listclass[2].slice(14)].outputs[listclass[3]].connections.splice(index_out,1);
-      /*
+
       var index_in = this.drawflow.drawflow[this.module].data[listclass[1].slice(13)].inputs[listclass[4]].connections.findIndex(function(item,i) {
         return item.node === listclass[2].slice(14) && item.input === listclass[3]
       });
       this.drawflow.drawflow[this.module].data[listclass[1].slice(13)].inputs[listclass[4]].connections.splice(index_in,1);
-      */
+
       elemsIn[i].remove();
 
       this.dispatch('connectionRemoved', { output_id: listclass[2].slice(14), input_id: listclass[1].slice(13), output_class: listclass[3], input_class: listclass[4] } );
